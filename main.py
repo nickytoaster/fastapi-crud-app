@@ -111,3 +111,119 @@ def delete_user(user_id: int):
     finally:
         cursor.close()
         conn.close()
+
+@app.get("/users/{user_id}/products")
+def get_user_products(user_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT id FROM users WHERE id = %s;", (user_id,))
+    if cursor.fetchone() is None:
+        cursor.close()
+        conn.close()
+        return {"status": "error", "message": "USER NOT FOUND!"}
+    
+    cursor.execute("SELECT id, name, price FROM products WHERE user_id = %s;", (user_id,))
+    products = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    
+    result = [{"id": p[0], "name": p[1], "price": float(p[2])} for p in products]
+    return {"user_id": user_id, "products": result}
+
+class ProductCreate(BaseModel):
+    name: str
+    price: float
+
+@app.post("/users/{user_id}/products")
+def create_user_product(user_id: int, product: ProductCreate):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT id FROM users WHERE id = %s;", (user_id,))
+    if cursor.fetchone() is None:
+        cursor.close()
+        conn.close()
+        return {"status": "error", "message": "USER NOT FOUND!"}
+    
+    try:
+        cursor.execute(
+            "INSERT INTO products (user_id, name, price) VALUES (%s, %s, %s) RETURNING id;",
+            (user_id, product.name, product.price)
+        )
+        new_id = cursor.fetchone()[0]
+        conn.commit()
+        return {"status": "success", "id": new_id, "user_id": user_id, "name": product.name, "price": product.price}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.put("/products/{product_id}")
+def update_product(product_id: int, product: ProductCreate):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "UPDATE products SET name = %s, price = %s WHERE id = %s RETURNING id, user_id;",
+            (product.name, product.price, product_id)
+        )
+        updated = cursor.fetchone()
+        conn.commit()
+        if updated is None:
+            return {"status": "error", "message": "PRODUCT NOT FOUND!"}
+        return {
+            "status": "success",
+            "id": product_id,
+            "user_id": updated[1],
+            "name": product.name,
+            "price": product.price
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.delete("/products/{product_id}")
+def delete_product(product_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM products WHERE id = %s RETURNING id;", (product_id,))
+        deleted = cursor.fetchone()
+        conn.commit()
+        if deleted is None:
+            return {"status": "error", "message": "PRODUCT NOT FOUND!"}
+        return {"status": "success", "message": f"Product with ID {product_id} deleted"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.delete("/users/{user_id}/products")
+def delete_user_products(user_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT id FROM users WHERE id = %s;", (user_id,))
+        if cursor.fetchone() is None:
+            return {"status": "error", "message": "USER NOT FOUND!"}
+        
+        cursor.execute("DELETE FROM products WHERE user_id = %s;", (user_id,))
+        deleted_count = cursor.rowcount
+        conn.commit()
+        
+        return {
+            "status": "success",
+            "user_id": user_id,
+            "deleted_products": deleted_count,
+            "message": f"Products deleted: {deleted_count}"
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        cursor.close()
+        conn.close()
