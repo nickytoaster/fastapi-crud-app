@@ -315,59 +315,6 @@ def change_user_password(
     else:
         return {"status": "error", "message": "You don't have rights to change this password!"}
 
-# @app.put("/users/{user_id}/password") # Смена пароля. Пользователь может сменить свой пароль, зная старый, а админ — любой без старого.
-# def change_user_password(
-#     user_id: int,
-#     old_password: str = None,
-#     new_password: str = None,
-#     token: str = Depends(oauth2_scheme)
-# ):
-#     try:
-#         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-#         current_user_id = payload.get("id")
-#         current_user_role = payload.get("role")
-#     except JWTError:
-#         raise HTTPException(status_code=401, detail="INVALID TOKEN!")
-    
-#     if not new_password:
-#         return {"status": "error", "message": "NEW PASSWORD REQUIRED!"}
-    
-#     if current_user_id == user_id:
-#         if not old_password:
-#             return {"status": "error", "message": "To change your password, enter your old password!"}
-        
-#         conn = get_db_connection()
-#         cursor = conn.cursor()
-#         cursor.execute("SELECT password FROM users WHERE id = %s;", (user_id,))
-#         current_hashed = cursor.fetchone()[0]
-#         cursor.close()
-#         conn.close()
-        
-#         if not verify_password(old_password, current_hashed):
-#             return {"status": "error", "message": "INCORRECT CURRENT PASSWORD!"}
-        
-#         new_hashed = get_password_hash(new_password)
-#         conn = get_db_connection()
-#         cursor = conn.cursor()
-#         cursor.execute("UPDATE users SET password = %s WHERE id = %s;", (new_hashed, user_id))
-#         conn.commit()
-#         cursor.close()
-#         conn.close()
-#         return {"status": "success", "message": "Password updated successfully!"}
-    
-#     elif current_user_role == "admin":
-#         new_hashed = get_password_hash(new_password)
-#         conn = get_db_connection()
-#         cursor = conn.cursor()
-#         cursor.execute("UPDATE users SET password = %s WHERE id = %s;", (new_hashed, user_id))
-#         conn.commit()
-#         cursor.close()
-#         conn.close()
-#         return {"status": "success", "message": f"The password for user with ID {user_id} has been updated by admin!"}
-    
-#     else:
-#         return {"status": "error", "message": "You don't have rights to change this password!"}
-
 @app.put("/admin/users/{user_id}/role") # Изменяет роль пользователя. Доступно только админам.
 def change_user_role(
     user_id: int,
