@@ -23,6 +23,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 class UserBase(BaseModel):
     name: str
     email: str
+    role: str = "user"
 
 """Модель для регистрации нового пользователя (с паролем)."""
 class UserCreate(UserBase):
@@ -41,6 +42,11 @@ class Token(BaseModel):
 class ProductCreate(BaseModel):
     name: str
     price: float
+
+"""Модель для изменения пароля."""
+class PasswordChange(BaseModel):
+    old_password: str = None
+    new_password: str
 
 # ====== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======
 
@@ -78,7 +84,7 @@ app = FastAPI() # СОЗДАНИЕ ЭКЗЕМПЛЯРА ПРИЛОЖЕНИЯ FAS
 
 @app.get("/") # Корневой эндпоинт, проверка работоспособности сервера.
 def read_root():
-    return {"message": "Hello, World! I am alive!"}
+    return {"message": "Hello, World! I am alive! 👽"}
 
 # --- АВТОРИЗАЦИЯ ---
 
@@ -105,7 +111,7 @@ def register(user: UserCreate):
 def login(form_data: OAuth2PasswordRequestForm = Depends()):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, name, email, password FROM users WHERE name = %s;", (form_data.username,))
+    cursor.execute("SELECT id, name, email, password, role FROM users WHERE name = %s;", (form_data.username,))
     user = cursor.fetchone()
     cursor.close()
     conn.close()
@@ -113,11 +119,11 @@ def login(form_data: OAuth2PasswordRequestForm = Depends()):
     if not user or not verify_password(form_data.password, user[3]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="INCORRECT USERNAME OR PASSWORD",
+            detail="INCORRECT USERNAME OR PASSWORD!",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    access_token = create_access_token(data={"sub": user[1], "id": user[0]})
+    access_token = create_access_token(data={"sub": user[1], "id": user[0], "role": user[4]})
     return {"access_token": access_token, "token_type": "bearer"}
 
 # --- ПОЛЬЗОВАТЕЛИ ---
@@ -134,8 +140,34 @@ def get_users():
     result = [{"id": u[0], "name": u[1], "email": u[2]} for u in users]
     return {"users": result}
 
-@app.post("/users") # Создаёт нового пользователя (без пароля).
-def create_user(user: UserBase):
+@app.get("/admin/users") # Возвращает список всех пользователей с их ролями. Доступно только админам.
+def get_all_users_with_roles(token: str = Depends(oauth2_scheme)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="FORBIDDEN: Admin rights required!")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="INVALID TOKEN!")
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name, email, role FROM users;")
+    users = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    
+    result = [{"id": u[0], "name": u[1], "email": u[2], "role": u[3]} for u in users]
+    return {"users": result}
+
+@app.post("/users") # Создаёт нового пользователя (без пароля). Доступно только админам.
+def create_user(user: UserBase, token: str = Depends(oauth2_scheme)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="FORBIDDEN: Admin rights required!")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="INVALID TOKEN!")
+
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -160,7 +192,7 @@ def read_users_me(token: str = Depends(oauth2_scheme)):
         username = payload.get("sub")
         return {"id": user_id, "username": username}
     except JWTError:
-        raise HTTPException(status_code=401, detail="INVALID TOKEN")
+        raise HTTPException(status_code=401, detail="INVALID TOKEN!")
 
 @app.get("/users/{user_id}") # Возвращает информацию о пользователе по ID.
 def get_user(user_id: int):
@@ -175,8 +207,18 @@ def get_user(user_id: int):
         return {"status": "error", "message": "USER NOT FOUND!"}
     return {"id": user[0], "name": user[1], "email": user[2]}
 
-@app.put("/users/{user_id}") # Обновляет данные пользователя (без пароля).
-def update_user(user_id: int, user: UserBase):
+@app.put("/users/{user_id}") # Обновляет данные пользователя. Только пользователь или админ.
+def update_user(user_id: int, user: UserBase, token: str = Depends (oauth2_scheme)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        current_user_id = payload.get("id")
+        current_user_role = payload.get("role")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="INVALID TOKEN!")
+
+    if current_user_role != "admin" and current_user_id != user_id:
+        return {"status": "error", "message": "CANNOT UPDATE THIS USER!"}
+
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -195,15 +237,16 @@ def update_user(user_id: int, user: UserBase):
         cursor.close()
         conn.close()
 
-@app.delete("/users/{user_id}") # Удаляет пользователя. Только если это делает владелец аккаунта.
+@app.delete("/users/{user_id}") # Удаляет пользователя. Только пользователь или админ.
 def delete_user(user_id: int, token: str = Depends(oauth2_scheme)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         current_user_id = payload.get("id")
-        if current_user_id != user_id:
-            return {"status": "error", "message": "CANNOT DELETE ANOTHER USER"}
+        current_user_role = payload.get("role")
+        if current_user_role != "admin" and current_user_id != user_id:
+            return {"status": "error", "message": "CANNOT DELETE THIS USER!"}
     except JWTError:
-        raise HTTPException(status_code=401, detail="INVALID TOKEN")
+        raise HTTPException(status_code=401, detail="INVALID TOKEN!")
     
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -213,12 +256,149 @@ def delete_user(user_id: int, token: str = Depends(oauth2_scheme)):
         conn.commit()
         if deleted is None:
             return {"status": "error", "message": "USER NOT FOUND!"}
-        return {"status": "success", "message": f"User with ID {user_id} deleted"}
+        return {"status": "success", "message": f"User with ID {user_id} deleted!"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
     finally:
         cursor.close()
         conn.close()
+
+@app.put("/users/{user_id}/password") # Смена пароля. Пользователь может сменить свой пароль, зная старый, а админ — любой без старого.
+def change_user_password(
+    user_id: int,
+    password_data: PasswordChange,
+    token: str = Depends(oauth2_scheme)
+):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        current_user_id = payload.get("id")
+        current_user_role = payload.get("role")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="INVALID TOKEN!")
+    
+    if not password_data.new_password:
+        return {"status": "error", "message": "NEW PASSWORD REQUIRED!"}
+    
+    if current_user_id == user_id:
+        if not password_data.old_password:
+            return {"status": "error", "message": "To change your password, enter your old password!"}
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT password FROM users WHERE id = %s;", (user_id,))
+        current_hashed = cursor.fetchone()[0]
+        cursor.close()
+        conn.close()
+        
+        if not verify_password(password_data.old_password, current_hashed):
+            return {"status": "error", "message": "INCORRECT CURRENT PASSWORD!"}
+        
+        new_hashed = get_password_hash(password_data.new_password)
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET password = %s WHERE id = %s;", (new_hashed, user_id))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return {"status": "success", "message": "Password updated successfully!"}
+    
+    elif current_user_role == "admin":
+        new_hashed = get_password_hash(password_data.new_password)
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET password = %s WHERE id = %s;", (new_hashed, user_id))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return {"status": "success", "message": f"The password for user with ID {user_id} has been updated by admin!"}
+    
+    else:
+        return {"status": "error", "message": "You don't have rights to change this password!"}
+
+# @app.put("/users/{user_id}/password") # Смена пароля. Пользователь может сменить свой пароль, зная старый, а админ — любой без старого.
+# def change_user_password(
+#     user_id: int,
+#     old_password: str = None,
+#     new_password: str = None,
+#     token: str = Depends(oauth2_scheme)
+# ):
+#     try:
+#         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+#         current_user_id = payload.get("id")
+#         current_user_role = payload.get("role")
+#     except JWTError:
+#         raise HTTPException(status_code=401, detail="INVALID TOKEN!")
+    
+#     if not new_password:
+#         return {"status": "error", "message": "NEW PASSWORD REQUIRED!"}
+    
+#     if current_user_id == user_id:
+#         if not old_password:
+#             return {"status": "error", "message": "To change your password, enter your old password!"}
+        
+#         conn = get_db_connection()
+#         cursor = conn.cursor()
+#         cursor.execute("SELECT password FROM users WHERE id = %s;", (user_id,))
+#         current_hashed = cursor.fetchone()[0]
+#         cursor.close()
+#         conn.close()
+        
+#         if not verify_password(old_password, current_hashed):
+#             return {"status": "error", "message": "INCORRECT CURRENT PASSWORD!"}
+        
+#         new_hashed = get_password_hash(new_password)
+#         conn = get_db_connection()
+#         cursor = conn.cursor()
+#         cursor.execute("UPDATE users SET password = %s WHERE id = %s;", (new_hashed, user_id))
+#         conn.commit()
+#         cursor.close()
+#         conn.close()
+#         return {"status": "success", "message": "Password updated successfully!"}
+    
+#     elif current_user_role == "admin":
+#         new_hashed = get_password_hash(new_password)
+#         conn = get_db_connection()
+#         cursor = conn.cursor()
+#         cursor.execute("UPDATE users SET password = %s WHERE id = %s;", (new_hashed, user_id))
+#         conn.commit()
+#         cursor.close()
+#         conn.close()
+#         return {"status": "success", "message": f"The password for user with ID {user_id} has been updated by admin!"}
+    
+#     else:
+#         return {"status": "error", "message": "You don't have rights to change this password!"}
+
+@app.put("/admin/users/{user_id}/role") # Изменяет роль пользователя. Доступно только админам.
+def change_user_role(
+    user_id: int,
+    new_role: str,
+    token: str = Depends(oauth2_scheme)
+):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="FORBIDDEN: Admin rights required!")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="INVALID TOKEN!")
+    
+    allowed_roles = ["user", "admin", "moderator"]
+    if new_role not in allowed_roles:
+        return {"status": "error", "message": f"INVALID ROLE! Valid roles: {', '.join(allowed_roles)}"}
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM users WHERE id = %s;", (user_id,))
+    if cursor.fetchone() is None:
+        cursor.close()
+        conn.close()
+        return {"status": "error", "message": "USER NOT FOUND!"}
+    
+    cursor.execute("UPDATE users SET role = %s WHERE id = %s;", (new_role, user_id))
+    conn.commit()
+    cursor.close()
+    conn.close()
+    
+    return {"status": "success", "message": f"The role of user with ID {user_id} has been changed to '{new_role}'!"}
 
 # --- ТОВАРЫ ПОЛЬЗОВАТЕЛЕЙ ---
 
@@ -241,8 +421,18 @@ def get_user_products(user_id: int):
     result = [{"id": p[0], "name": p[1], "price": float(p[2])} for p in products]
     return {"user_id": user_id, "products": result}
 
-@app.post("/users/{user_id}/products") # Добавляет новый товар пользователю.
-def create_user_product(user_id: int, product: ProductCreate):
+@app.post("/users/{user_id}/products") # Добавляет новый товар пользователю. Только пользователь или админ.
+def create_user_product(user_id: int, product: ProductCreate, token: str = Depends(oauth2_scheme)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        current_user_id = payload.get("id")
+        current_user_role = payload.get("role")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="INVALID TOKEN!")
+
+    if current_user_role != "admin" and current_user_id != user_id:
+        return {"status": "error", "message": "CANNOT ADD PRODUCT TO THIS USER!"}
+
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -266,13 +456,25 @@ def create_user_product(user_id: int, product: ProductCreate):
         cursor.close()
         conn.close()
 
-@app.delete("/users/{user_id}/products") # Удаляет все товары пользователя.
-def delete_user_products(user_id: int):
+@app.delete("/users/{user_id}/products") # Удаляет все товары пользователя. Только пользователь или админ.
+def delete_user_products(user_id: int, token: str = Depends(oauth2_scheme)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        current_user_id = payload.get("id")
+        current_user_role = payload.get("role")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="INVALID TOKEN!")
+
+    if current_user_role != "admin" and current_user_id != user_id:
+        return {"status": "error", "message": "CANNOT DELETE PRODUCTS OF THIS USER!"}
+
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute("SELECT id FROM users WHERE id = %s;", (user_id,))
         if cursor.fetchone() is None:
+            cursor.close()
+            conn.close()
             return {"status": "error", "message": "USER NOT FOUND!"}
         
         cursor.execute("DELETE FROM products WHERE user_id = %s;", (user_id,))
@@ -293,11 +495,51 @@ def delete_user_products(user_id: int):
 
 # --- ТОВАРЫ (НЕЗАВИСИМЫЕ) ---
 
-@app.put("/products/{product_id}") # Обновляет данные товара по его ID.
-def update_product(product_id: int, product: ProductCreate):
+@app.get("/products/{product_id}") # Возвращает информацию о товаре по его ID.
+def get_product(product_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, user_id, name, price FROM products WHERE id = %s;", (product_id,))
+    product = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    
+    if product is None:
+        return {"status": "error", "message": "PRODUCT NOT FOUND!"}
+    
+    return {
+        "id": product[0],
+        "user_id": product[1],
+        "name": product[2],
+        "price": float(product[3])
+    }
+
+@app.put("/products/{product_id}") # Обновляет данные товара по его ID. Только владелец товара или админ.
+def update_product(product_id: int, product: ProductCreate, token: str = Depends(oauth2_scheme)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        current_user_id = payload.get("id")
+        current_user_role = payload.get("role")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="INVALID TOKEN!")
+    
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        cursor.execute("SELECT user_id FROM products WHERE id = %s;", (product_id,))
+        product_data = cursor.fetchone()
+        if product_data is None:
+            cursor.close()
+            conn.close()
+            return {"status": "error", "message": "PRODUCT NOT FOUND!"}
+
+        product_owner_id = product_data[0]
+
+        if current_user_role != "admin" and current_user_id != product_owner_id:
+            cursor.close()
+            conn.close()
+            return {"status": "error", "message": "CANNOT UPDATE THIS PRODUCT!"}
+        
         cursor.execute(
             "UPDATE products SET name = %s, price = %s WHERE id = %s RETURNING id, user_id;",
             (product.name, product.price, product_id)
@@ -319,17 +561,38 @@ def update_product(product_id: int, product: ProductCreate):
         cursor.close()
         conn.close()
 
-@app.delete("/products/{product_id}") # Удаляет товар по его ID.
-def delete_product(product_id: int):
+@app.delete("/products/{product_id}") # Удаляет товар по его ID. Только владелец товара или админ.
+def delete_product(product_id: int, token: str = Depends(oauth2_scheme)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        current_user_id = payload.get("id")
+        current_user_role = payload.get("role")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="INVALID TOKEN!")
+    
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        cursor.execute("SELECT user_id FROM products WHERE id = %s;", (product_id,))
+        product_data = cursor.fetchone()
+        if product_data is None:
+            cursor.close()
+            conn.close()
+            return {"status": "error", "message": "PRODUCT NOT FOUND!"}
+
+        product_owner_id = product_data[0]
+
+        if current_user_role != "admin" and current_user_id != product_owner_id:
+            cursor.close()
+            conn.close()
+            return {"status": "error", "message": "CANNOT DELETE THIS PRODUCT!"}
+
         cursor.execute("DELETE FROM products WHERE id = %s RETURNING id;", (product_id,))
         deleted = cursor.fetchone()
         conn.commit()
         if deleted is None:
             return {"status": "error", "message": "PRODUCT NOT FOUND!"}
-        return {"status": "success", "message": f"Product with ID {product_id} deleted"}
+        return {"status": "success", "message": f"Product with ID {product_id} deleted!"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
     finally:
