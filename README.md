@@ -7,7 +7,7 @@
  - *Python 3.10+*  
  - *FastAPI*  
  - *PostgreSQL 15*  
- - *Docker*  
+ - *Docker, Docker Compose*  
  - *Uvicorn*  
 
 ## Структура проекта  
@@ -16,25 +16,60 @@
 &emsp;&emsp;    ├── *`main.py`* # Основной файл приложения FastAPI  
 &emsp;&emsp;    ├── *`requirements.txt`* # Зависимости проекта  
 &emsp;&emsp;    ├── *`docker-compose.yml`* # Конфигурация для запуска PostgreSQL в Docker  
+&emsp;&emsp;    ├── *`Dockerfile`* # Инструкция для сборки образа приложения  
 &emsp;&emsp;    ├── *`.env`* # Переменные окружения (не публикуется в Git)  
 &emsp;&emsp;    ├── ***`scripts/`*** # Вспомогательные скрипты для настройки БД  
-&emsp;&emsp;    │ ├── *`create_table.py`* # Создание таблицы users  
+&emsp;&emsp;    │ ├── *`create_table.py`* # Создание таблицы users (уже не нужно, есть автогенерация)  
 &emsp;&emsp;    │ └── *`insert_user.py`* # Тестовая вставка записей (для первоначального заполнения)  
 &emsp;&emsp;    └── *`README.md`* # Описание проекта  
 
 ## Как запустить  
 
- 1. **Клонировать репозиторий.**  
- 2. **Установить зависимости:** `pip install -r requirements.txt`  
- 3. **Запустить базу данных:** `docker-compose up -d`  
-    **или:** `docker run --name my_postgres -e POSTGRES_PASSWORD=mysecretpassword -e POSTGRES_DB=mydb -p 5432:5432 -d postgres:15`  
- 4. **Запустить сервер:** `uvicorn main:app --reload`  
+### Быстрый старт (через Docker):  
+  
+Это **основной** способ запуска проекта. Всё, что нужно — *Docker* и *Docker Compose*.  
+  
+1. **Клонировать репозиторий.**  
+2. **Запустить проект одной командой:** `docker-compose up --build`  
+  
+**После запуска:**  
+ API доступно по адресу: `http://localhost:8000` ,  
+ Swagger документация: `http://localhost:8000/docs`  
+  
+*При первом запуске таблицы в базе данных создаются **автоматически**, если их ещё нет.*  
+  
+### Альтернативный запуск:  
+  
+*Если нужно запустить проект **локально.***  
+  
+1. **Клонировать репозиторий.**  
+2. **Установить зависимости:** `pip install -r requirements.txt`  
+3. **Запустить базу данных:** `docker-compose up -d`  
+   **или:** `docker run --name my_postgres -e POSTGRES_PASSWORD=mysecretpassword -e POSTGRES_DB=mydb -p 5432:5432 -d postgres:15`  
+4. **Запустить сервер:** `uvicorn main:app --reload`  
+  
+## Структура базы данных  
+  
+### Таблица `users`:  
+  
+`id` — уникальный идентификатор  
+`name` — имя пользователя  
+`email` — email  
+`password` — хеш пароля  
+`role` — роль пользователя (`user` или `admin`)  
+  
+### Таблица `products`:  
+  
+`id` — уникальный идентификатор  
+`user_id` — внешний ключ к таблице `users`  
+`name` — название товара  
+`price` — цена  
 
 ## Аутентификация и авторизация  
 
 Проект использует **JWT-токены** для защиты эндпоинтов. Пароли хранятся в хешированном виде (SHA-256).  
 
-### Получение токена  
+### Получение токена:  
 
 1. **Зарегистрируйте пользователя:** `POST .../register .../json {"name": "examplename", "email": "example@email.com", "password": "examplepassword"}`  
 2. **Получите токен (вход):** `POST .../token .../x-www-form-urlencoded "username=examplename&password=examplepassword"`  
@@ -82,3 +117,5 @@
     SECRET_KEY=09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7  
     ALGORITHM=HS256  
     ACCESS_TOKEN_EXPIRE_MINUTES=30  
+
+**Важно:** `SECRET_KEY` должен быть уникальным для каждого проекта. Сгенеририровать его можно с помощью команды: `import secrets; print(secrets.token_urlsafe(32))`

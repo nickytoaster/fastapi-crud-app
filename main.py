@@ -74,21 +74,53 @@ def get_db_connection():
         dbname=os.getenv('DB_NAME'),
         user=os.getenv('DB_USER'),
         password=os.getenv('DB_PASSWORD'),
-        host=os.getenv('DB_HOST'),
+        host=os.getenv('DB_HOST', 'db'),
         port=os.getenv('DB_PORT')
     )
 
+"""Создаёт таблицы в базе данных, если их нет."""
+def init_db():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Таблица пользователей
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(100) NOT NULL,
+            email VARCHAR(100) UNIQUE NOT NULL,
+            password VARCHAR(255) NOT NULL,
+            role VARCHAR(20) DEFAULT 'user'
+        );
+    """)
+
+    # Таблица товаров
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS products (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            name VARCHAR(100) NOT NULL,
+            price DECIMAL(10, 2) NOT NULL
+        );
+    """)
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
 app = FastAPI() # СОЗДАНИЕ ЭКЗЕМПЛЯРА ПРИЛОЖЕНИЯ FASTAPI
+
+init_db()
 
 # ====== ЭНДПОИНТЫ ======
 
-@app.get("/") # Корневой эндпоинт, проверка работоспособности сервера.
+@app.get("/", tags=["Root"]) # Корневой эндпоинт, проверка работоспособности сервера.
 def read_root():
     return {"message": "Hello, World! I am alive! 👽"}
 
 # --- АВТОРИЗАЦИЯ ---
 
-@app.post("/register", response_model=dict) # Регистрация нового пользователя. Пароль хешируется перед сохранением.
+@app.post("/register", response_model=dict, tags=["Auth"]) # Регистрация нового пользователя. Пароль хешируется перед сохранением.
 def register(user: UserCreate):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -107,7 +139,7 @@ def register(user: UserCreate):
         cursor.close()
         conn.close()
 
-@app.post("/token", response_model=Token) # Аутентификация пользователя. Возвращает JWT-токен.
+@app.post("/token", response_model=Token, tags=["Auth"]) # Аутентификация пользователя. Возвращает JWT-токен.
 def login(form_data: OAuth2PasswordRequestForm = Depends()):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -128,7 +160,7 @@ def login(form_data: OAuth2PasswordRequestForm = Depends()):
 
 # --- ПОЛЬЗОВАТЕЛИ ---
 
-@app.get("/users") # Возвращает список всех пользователей.
+@app.get("/users", tags=["Users"]) # Возвращает список всех пользователей.
 def get_users():
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -140,7 +172,7 @@ def get_users():
     result = [{"id": u[0], "name": u[1], "email": u[2]} for u in users]
     return {"users": result}
 
-@app.get("/admin/users") # Возвращает список всех пользователей с их ролями. Доступно только админам.
+@app.get("/admin/users", tags=["Users"]) # Возвращает список всех пользователей с их ролями. Доступно только админам.
 def get_all_users_with_roles(token: str = Depends(oauth2_scheme)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -159,7 +191,7 @@ def get_all_users_with_roles(token: str = Depends(oauth2_scheme)):
     result = [{"id": u[0], "name": u[1], "email": u[2], "role": u[3]} for u in users]
     return {"users": result}
 
-@app.post("/users") # Создаёт нового пользователя (без пароля). Доступно только админам.
+@app.post("/users", tags=["Users"]) # Создаёт нового пользователя (без пароля). Доступно только админам.
 def create_user(user: UserBase, token: str = Depends(oauth2_scheme)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -184,7 +216,7 @@ def create_user(user: UserBase, token: str = Depends(oauth2_scheme)):
         cursor.close()
         conn.close()
 
-@app.get("/users/me") # Возвращает информацию о текущем аутентифицированном пользователе.
+@app.get("/users/me", tags=["Users"]) # Возвращает информацию о текущем аутентифицированном пользователе.
 def read_users_me(token: str = Depends(oauth2_scheme)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -194,7 +226,7 @@ def read_users_me(token: str = Depends(oauth2_scheme)):
     except JWTError:
         raise HTTPException(status_code=401, detail="INVALID TOKEN!")
 
-@app.get("/users/{user_id}") # Возвращает информацию о пользователе по ID.
+@app.get("/users/{user_id}", tags=["Users"]) # Возвращает информацию о пользователе по ID.
 def get_user(user_id: int):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -207,7 +239,7 @@ def get_user(user_id: int):
         return {"status": "error", "message": "USER NOT FOUND!"}
     return {"id": user[0], "name": user[1], "email": user[2]}
 
-@app.put("/users/{user_id}") # Обновляет данные пользователя. Только пользователь или админ.
+@app.put("/users/{user_id}", tags=["Users"]) # Обновляет данные пользователя. Только пользователь или админ.
 def update_user(user_id: int, user: UserBase, token: str = Depends (oauth2_scheme)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -237,7 +269,7 @@ def update_user(user_id: int, user: UserBase, token: str = Depends (oauth2_schem
         cursor.close()
         conn.close()
 
-@app.delete("/users/{user_id}") # Удаляет пользователя. Только пользователь или админ.
+@app.delete("/users/{user_id}", tags=["Users"]) # Удаляет пользователя. Только пользователь или админ.
 def delete_user(user_id: int, token: str = Depends(oauth2_scheme)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -263,7 +295,7 @@ def delete_user(user_id: int, token: str = Depends(oauth2_scheme)):
         cursor.close()
         conn.close()
 
-@app.put("/users/{user_id}/password") # Смена пароля. Пользователь может сменить свой пароль, зная старый, а админ — любой без старого.
+@app.put("/users/{user_id}/password", tags=["Users"]) # Смена пароля. Пользователь может сменить свой пароль, зная старый, а админ — любой без старого.
 def change_user_password(
     user_id: int,
     password_data: PasswordChange,
@@ -315,7 +347,7 @@ def change_user_password(
     else:
         return {"status": "error", "message": "You don't have rights to change this password!"}
 
-@app.put("/admin/users/{user_id}/role") # Изменяет роль пользователя. Доступно только админам.
+@app.put("/admin/users/{user_id}/role", tags=["Users"]) # Изменяет роль пользователя. Доступно только админам.
 def change_user_role(
     user_id: int,
     new_role: str,
@@ -349,7 +381,7 @@ def change_user_role(
 
 # --- ТОВАРЫ ПОЛЬЗОВАТЕЛЕЙ ---
 
-@app.get("/users/{user_id}/products") # Возвращает все товары конкретного пользователя.
+@app.get("/users/{user_id}/products", tags=["User Products"]) # Возвращает все товары конкретного пользователя.
 def get_user_products(user_id: int):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -368,7 +400,7 @@ def get_user_products(user_id: int):
     result = [{"id": p[0], "name": p[1], "price": float(p[2])} for p in products]
     return {"user_id": user_id, "products": result}
 
-@app.post("/users/{user_id}/products") # Добавляет новый товар пользователю. Только пользователь или админ.
+@app.post("/users/{user_id}/products", tags=["User Products"]) # Добавляет новый товар пользователю. Только пользователь или админ.
 def create_user_product(user_id: int, product: ProductCreate, token: str = Depends(oauth2_scheme)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -403,7 +435,7 @@ def create_user_product(user_id: int, product: ProductCreate, token: str = Depen
         cursor.close()
         conn.close()
 
-@app.delete("/users/{user_id}/products") # Удаляет все товары пользователя. Только пользователь или админ.
+@app.delete("/users/{user_id}/products", tags=["User Products"]) # Удаляет все товары пользователя. Только пользователь или админ.
 def delete_user_products(user_id: int, token: str = Depends(oauth2_scheme)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -442,7 +474,7 @@ def delete_user_products(user_id: int, token: str = Depends(oauth2_scheme)):
 
 # --- ТОВАРЫ (НЕЗАВИСИМЫЕ) ---
 
-@app.get("/products/{product_id}") # Возвращает информацию о товаре по его ID.
+@app.get("/products/{product_id}", tags=["Products"]) # Возвращает информацию о товаре по его ID.
 def get_product(product_id: int):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -461,7 +493,7 @@ def get_product(product_id: int):
         "price": float(product[3])
     }
 
-@app.put("/products/{product_id}") # Обновляет данные товара по его ID. Только владелец товара или админ.
+@app.put("/products/{product_id}", tags=["Products"]) # Обновляет данные товара по его ID. Только владелец товара или админ.
 def update_product(product_id: int, product: ProductCreate, token: str = Depends(oauth2_scheme)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -508,7 +540,7 @@ def update_product(product_id: int, product: ProductCreate, token: str = Depends
         cursor.close()
         conn.close()
 
-@app.delete("/products/{product_id}") # Удаляет товар по его ID. Только владелец товара или админ.
+@app.delete("/products/{product_id}", tags=["Products"]) # Удаляет товар по его ID. Только владелец товара или админ.
 def delete_product(product_id: int, token: str = Depends(oauth2_scheme)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
